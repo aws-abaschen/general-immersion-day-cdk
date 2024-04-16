@@ -1,5 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
-import { AmazonLinuxCpuType, AmazonLinuxGeneration, AmazonLinuxImage, CfnLaunchTemplate, GatewayVpcEndpointAwsService, Instance, InstanceType, IpAddresses, SecurityGroup, SubnetType, Vpc } from 'aws-cdk-lib/aws-ec2';
+import { AmazonLinuxCpuType, AmazonLinuxGeneration, AmazonLinuxImage, CfnLaunchTemplate, GatewayVpcEndpointAwsService, Instance, InstanceType, IpAddresses, SecurityGroup, SubnetType, UserData, Vpc } from 'aws-cdk-lib/aws-ec2';
 import { CpuArchitecture } from 'aws-cdk-lib/aws-ecs';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
@@ -29,28 +29,8 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
       resources: ['*'],
       principals: [new cdk.aws_iam.AnyPrincipal()]
     }));
-
-    const sgWebServer = new SecurityGroup(this, 'webServerSecurityGroup', {
-      vpc,
-      description: 'Web Server Security Group'
-    });
-    sgWebServer.addIngressRule(cdk.aws_ec2.Peer.anyIpv4(), cdk.aws_ec2.Port.tcp(80));
-    sgWebServer.addIngressRule(cdk.aws_ec2.Peer.anyIpv4(), cdk.aws_ec2.Port.tcp(22));
-    
-    //EC2 metadata must use V2 only
-    const ec2WebServer = new Instance(this, 'webServer', {
-      instanceName: 'WebServer Instance',
-      requireImdsv2: true, //add instance metadata for token v2
-      vpc,
-      instanceType: new InstanceType('t2.micro'),
-      machineImage: new AmazonLinuxImage({ generation: AmazonLinuxGeneration.AMAZON_LINUX_2023, cpuType: AmazonLinuxCpuType.X86_64 }),
-      vpcSubnets: {
-        subnetType: cdk.aws_ec2.SubnetType.PUBLIC
-      },
-      associatePublicIpAddress: true,
-      securityGroup: sgWebServer,
-    });
-    ec2WebServer.userData.addCommands(
+    const ec2UserDataWebServer = UserData.forLinux();
+    ec2UserDataWebServer.addCommands(
       'dnf install -y httpd wget php-fpm php-mysqli php-json php php-devel',
       'dnf install -y mariadb105-server',
       'dnf install -y httpd php-mbstring',
@@ -77,6 +57,28 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
       //# Update existing packages
       'dnf update -y'
     );
+    const sgWebServer = new SecurityGroup(this, 'webServerSecurityGroup', {
+      vpc,
+      description: 'Web Server Security Group'
+    });
+    sgWebServer.addIngressRule(cdk.aws_ec2.Peer.anyIpv4(), cdk.aws_ec2.Port.tcp(80));
+    sgWebServer.addIngressRule(cdk.aws_ec2.Peer.anyIpv4(), cdk.aws_ec2.Port.tcp(22));
+
+    //EC2 metadata must use V2 only
+    const ec2WebServer = new Instance(this, 'webServer', {
+      instanceName: 'WebServer Instance',
+      requireImdsv2: true, //add instance metadata for token v2
+      vpc,
+      instanceType: new InstanceType('t2.micro'),
+      machineImage: new AmazonLinuxImage({ generation: AmazonLinuxGeneration.AMAZON_LINUX_2023, cpuType: AmazonLinuxCpuType.X86_64 }),
+      vpcSubnets: {
+        subnetType: cdk.aws_ec2.SubnetType.PUBLIC
+      },
+      associatePublicIpAddress: true,
+      securityGroup: sgWebServer,
+      userData: ec2UserDataWebServer
+    });
+    
 
     //output the ec2 public IP
     new cdk.CfnOutput(this, 'ec2PublicIp', {
@@ -91,6 +93,11 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
     });
 
 
-
+    //// Create AMI
+    const webServerAmi = new AmazonLinuxImage({
+      cpuType: AmazonLinuxCpuType.X86_64,
+      generation: AmazonLinuxGeneration.AMAZON_LINUX_2023,
+      userData: ec2UserDataWebServer
+    });
   }
 }
