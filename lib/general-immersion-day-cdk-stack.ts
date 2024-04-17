@@ -1,13 +1,10 @@
 import * as cdk from 'aws-cdk-lib';
-import { AutoScalingGroup, AutoScalingGroupRequireImdsv2Aspect, GroupMetrics } from 'aws-cdk-lib/aws-autoscaling';
-import { AmazonLinuxCpuType, AmazonLinuxGeneration, AmazonLinuxImage, CfnLaunchTemplate, GatewayVpcEndpointAwsService, Instance, InstanceType, IpAddresses, LaunchTemplate, SecurityGroup, SubnetType, UserData, Vpc } from 'aws-cdk-lib/aws-ec2';
-import { CpuArchitecture } from 'aws-cdk-lib/aws-ecs';
-import { InstanceTarget } from 'aws-cdk-lib/aws-elasticloadbalancing';
+import { AutoScalingGroup, GroupMetrics } from 'aws-cdk-lib/aws-autoscaling';
+import { AmazonLinuxCpuType, AmazonLinuxGeneration, AmazonLinuxImage, GatewayVpcEndpointAwsService, Instance, InstanceType, IpAddresses, LaunchTemplate, SecurityGroup, SubnetType, UserData, Vpc } from 'aws-cdk-lib/aws-ec2';
 import { ApplicationLoadBalancer, ApplicationTargetGroup } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { InstanceIdTarget } from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
 import { InstanceProfile, ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
-// import * as sqs from 'aws-cdk-lib/aws-sqs';
 
 export class GeneralImmersionDayCdkStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
