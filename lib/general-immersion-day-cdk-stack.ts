@@ -178,5 +178,12 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
     })
     cdk.Tags.of(asgWeb).add('Name', 'ASG-Web-Instance')
 
+    //output the load balancer url
+    new cdk.CfnOutput(this, 'albUrl', {
+      value: alb.loadBalancerDnsName,
+      description: 'The URL of the load balancer',
+      exportName: 'albUrl'
+    });
+
   }
 }
