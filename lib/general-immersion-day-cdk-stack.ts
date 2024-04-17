@@ -1,7 +1,11 @@
 import * as cdk from 'aws-cdk-lib';
-import { AmazonLinuxCpuType, AmazonLinuxGeneration, AmazonLinuxImage, CfnLaunchTemplate, GatewayVpcEndpointAwsService, Instance, InstanceType, IpAddresses, SecurityGroup, SubnetType, UserData, Vpc } from 'aws-cdk-lib/aws-ec2';
+import { AutoScalingGroup, AutoScalingGroupRequireImdsv2Aspect, GroupMetrics } from 'aws-cdk-lib/aws-autoscaling';
+import { AmazonLinuxCpuType, AmazonLinuxGeneration, AmazonLinuxImage, CfnLaunchTemplate, GatewayVpcEndpointAwsService, Instance, InstanceType, IpAddresses, LaunchTemplate, SecurityGroup, SubnetType, UserData, Vpc } from 'aws-cdk-lib/aws-ec2';
 import { CpuArchitecture } from 'aws-cdk-lib/aws-ecs';
-import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { InstanceTarget } from 'aws-cdk-lib/aws-elasticloadbalancing';
+import { ApplicationLoadBalancer, ApplicationTargetGroup } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import { InstanceIdTarget } from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
+import { InstanceProfile, ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
 
@@ -78,7 +82,7 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
       securityGroup: sgWebServer,
       userData: ec2UserDataWebServer
     });
-    
+
 
     //output the ec2 public IP
     new cdk.CfnOutput(this, 'ec2PublicIp', {
@@ -99,5 +103,80 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
       generation: AmazonLinuxGeneration.AMAZON_LINUX_2023,
       userData: ec2UserDataWebServer
     });
+
+    const sgALB = new SecurityGroup(this, 'albSecurityGroup', {
+      vpc,
+      description: 'ALB Security Group'
+    });
+    sgALB.addIngressRule(cdk.aws_ec2.Peer.anyIpv4(), cdk.aws_ec2.Port.tcp(80));
+
+    const webServerTargetGroup = new ApplicationTargetGroup(this, 'albTargetGroup', {
+      port: 80,
+      protocol: cdk.aws_elasticloadbalancingv2.ApplicationProtocol.HTTP,
+      targetType: cdk.aws_elasticloadbalancingv2.TargetType.INSTANCE,
+      vpc,
+      targets: [new InstanceIdTarget(ec2WebServer.instanceId)],
+      protocolVersion: cdk.aws_elasticloadbalancingv2.ApplicationProtocolVersion.HTTP1,
+      targetGroupName: 'web-TG'
+
+    });
+    //create ALB, internet faced
+    const alb = new ApplicationLoadBalancer(this, 'alb', {
+      vpc,
+      internetFacing: true,
+      vpcSubnets: {
+        subnetType: SubnetType.PUBLIC
+      },
+      securityGroup: sgALB,
+    })
+    alb.addListener('http', {
+      port: 80,
+      open: true,
+      protocol: cdk.aws_elasticloadbalancingv2.ApplicationProtocol.HTTP,
+      defaultTargetGroups: [webServerTargetGroup]
+    })
+
+    const sgASG = new SecurityGroup(this, 'asgSecurityGroup', {
+      vpc,
+      description: 'ASG Security Group'
+    });
+    sgASG.addIngressRule(cdk.aws_ec2.Peer.securityGroupId(sgALB.securityGroupId), cdk.aws_ec2.Port.tcp(80));
+    const ssmInstanceProfile = new InstanceProfile(this, 'ssmInstanceProfile', {
+      instanceProfileName: 'SSMInstanceProfile',
+      role: new Role(this, 'ssmRole', {
+        roleName: 'SSMRole',
+        assumedBy: new ServicePrincipal('ec2.amazonaws.com'),
+        managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore')]
+      })
+    })
+    const webLaunchTemplate = new LaunchTemplate(this, 'launchTemplate', {
+      launchTemplateName: 'web',
+      machineImage: webServerAmi,
+      instanceType: new InstanceType('t2.micro'),
+      userData: ec2UserDataWebServer,
+      securityGroup: sgASG,
+      requireImdsv2: true,
+      instanceProfile: ssmInstanceProfile
+    });
+
+    const asgWeb = new AutoScalingGroup(this, 'asg', {
+      autoScalingGroupName: 'Web-ASG',
+      vpc,
+      minCapacity: 2,
+      maxCapacity: 4,
+      desiredCapacity: 2,
+      launchTemplate: webLaunchTemplate,
+      vpcSubnets: {
+        subnetType: SubnetType.PRIVATE_WITH_EGRESS
+      },
+      //enable group metrics within cloudwatch
+      groupMetrics: [GroupMetrics.all()],
+    });
+    asgWeb.attachToApplicationTargetGroup(webServerTargetGroup);
+    asgWeb.scaleOnCpuUtilization('web-asg-cpu', {
+      targetUtilizationPercent: 30
+    })
+    cdk.Tags.of(asgWeb).add('Name', 'ASG-Web-Instance')
+
   }
 }

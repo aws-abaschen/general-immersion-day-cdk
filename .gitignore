@@ -131,3 +131,4 @@ dist
 node_modules/
 cdk.context.json
 cdk.out/
+cdk.context.json
