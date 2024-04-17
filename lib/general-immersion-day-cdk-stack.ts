@@ -10,6 +10,7 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
+    //create a VPC on 2AZs, with cidr 10.0.0.0/16, 1 NAT and DNS support
     const vpc = new Vpc(this, 'vpc', {
       maxAzs: 2,
       ipAddresses: IpAddresses.cidr('10.0.0.0/16'),
@@ -23,13 +24,15 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
       service: GatewayVpcEndpointAwsService.S3,
       subnets: [{ subnetType: SubnetType.PRIVATE_WITH_EGRESS }],
     });
-    //give full access to s3Endpoint
+
+    //give full access to s3Endpoint to any principal
     s3Endpoint.addToPolicy(new PolicyStatement({
       effect: cdk.aws_iam.Effect.ALLOW,
       actions: ['s3:*'],
       resources: ['*'],
       principals: [new cdk.aws_iam.AnyPrincipal()]
     }));
+
     const ec2UserDataWebServer = UserData.forLinux();
     ec2UserDataWebServer.addCommands(
       'dnf install -y httpd wget php-fpm php-mysqli php-json php php-devel',
@@ -58,13 +61,20 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
       //# Update existing packages
       'dnf update -y'
     );
+
+    //create security group for webServer
     const sgWebServer = new SecurityGroup(this, 'webServerSecurityGroup', {
       vpc,
       description: 'Web Server Security Group'
     });
+    //allow 80 and 22 ports
     sgWebServer.addIngressRule(cdk.aws_ec2.Peer.anyIpv4(), cdk.aws_ec2.Port.tcp(80));
     sgWebServer.addIngressRule(cdk.aws_ec2.Peer.anyIpv4(), cdk.aws_ec2.Port.tcp(22));
 
+    //create EC2 instance using t2.micro, x86_64 and AML2023
+    //use public subnets with public IPs
+    //use security group sgWebServer
+    //use ec2UserDataWebServer
     //EC2 metadata must use V2 only
     const ec2WebServer = new Instance(this, 'webServer', {
       instanceName: 'WebServer Instance',
@@ -81,7 +91,7 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
     });
 
 
-    //output the ec2 public IP
+    //output the ec2 public IP and public DNS
     new cdk.CfnOutput(this, 'ec2PublicIp', {
       value: ec2WebServer.instancePublicIp,
       description: 'The public IP of the web server',
@@ -94,19 +104,22 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
     });
 
 
-    //// Create AMI
+    //// Create AMI with ec2UserDataWebServer
     const webServerAmi = new AmazonLinuxImage({
       cpuType: AmazonLinuxCpuType.X86_64,
       generation: AmazonLinuxGeneration.AMAZON_LINUX_2023,
       userData: ec2UserDataWebServer
     });
 
+    //create security group for ALB
     const sgALB = new SecurityGroup(this, 'albSecurityGroup', {
       vpc,
       description: 'ALB Security Group'
     });
+    //allow 80 port
     sgALB.addIngressRule(cdk.aws_ec2.Peer.anyIpv4(), cdk.aws_ec2.Port.tcp(80));
 
+    //create target group for ALB
     const webServerTargetGroup = new ApplicationTargetGroup(this, 'albTargetGroup', {
       port: 80,
       protocol: cdk.aws_elasticloadbalancingv2.ApplicationProtocol.HTTP,
@@ -115,8 +128,8 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
       targets: [new InstanceIdTarget(ec2WebServer.instanceId)],
       protocolVersion: cdk.aws_elasticloadbalancingv2.ApplicationProtocolVersion.HTTP1,
       targetGroupName: 'web-TG'
-
     });
+
     //create ALB, internet faced
     const alb = new ApplicationLoadBalancer(this, 'alb', {
       vpc,
@@ -126,6 +139,8 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
       },
       securityGroup: sgALB,
     })
+
+    //add listener to ALB to webServerTargetGroup
     alb.addListener('http', {
       port: 80,
       open: true,
@@ -133,11 +148,15 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
       defaultTargetGroups: [webServerTargetGroup]
     })
 
+    //create security group for ASG
     const sgASG = new SecurityGroup(this, 'asgSecurityGroup', {
       vpc,
       description: 'ASG Security Group'
     });
+    //allow 80 port
     sgASG.addIngressRule(cdk.aws_ec2.Peer.securityGroupId(sgALB.securityGroupId), cdk.aws_ec2.Port.tcp(80));
+
+    //create SSMInstanceProfile, an InstanceProfile for EC2 using managed policy for SSMManagedInstance
     const ssmInstanceProfile = new InstanceProfile(this, 'ssmInstanceProfile', {
       instanceProfileName: 'SSMInstanceProfile',
       role: new Role(this, 'ssmRole', {
@@ -145,7 +164,9 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
         assumedBy: new ServicePrincipal('ec2.amazonaws.com'),
         managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore')]
       })
-    })
+    });
+
+    //create launch template for ASG using all elements above for webServer
     const webLaunchTemplate = new LaunchTemplate(this, 'launchTemplate', {
       launchTemplateName: 'web',
       machineImage: webServerAmi,
@@ -156,6 +177,7 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
       instanceProfile: ssmInstanceProfile
     });
 
+    //create ASG, private subnets with egress, using webLaunchTemplate
     const asgWeb = new AutoScalingGroup(this, 'asg', {
       autoScalingGroupName: 'Web-ASG',
       vpc,
@@ -169,13 +191,16 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
       //enable group metrics within cloudwatch
       groupMetrics: [GroupMetrics.all()],
     });
+    //add ASG to webServerTargetGroup
     asgWeb.attachToApplicationTargetGroup(webServerTargetGroup);
+    //scale on cpu utilization at 30% usage
     asgWeb.scaleOnCpuUtilization('web-asg-cpu', {
       targetUtilizationPercent: 30
     })
+    //auto tag instances with Name=ASG-Web-Instance
     cdk.Tags.of(asgWeb).add('Name', 'ASG-Web-Instance')
 
-    //output the load balancer url
+    //output the ALB URL
     new cdk.CfnOutput(this, 'albUrl', {
       value: alb.loadBalancerDnsName,
       description: 'The URL of the load balancer',
