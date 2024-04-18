@@ -125,7 +125,6 @@ export class GeneralImmersionDayCdkStack extends cdk.Stack {
       protocol: cdk.aws_elasticloadbalancingv2.ApplicationProtocol.HTTP,
       targetType: cdk.aws_elasticloadbalancingv2.TargetType.INSTANCE,
       vpc,
-      targets: [new InstanceIdTarget(ec2WebServer.instanceId)],
       protocolVersion: cdk.aws_elasticloadbalancingv2.ApplicationProtocolVersion.HTTP1,
       targetGroupName: 'web-TG'
     });
